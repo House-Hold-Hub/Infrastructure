@@ -1,0 +1,12 @@
+# Local environment files hold credentials: never commit them.
+# Only the documented template .env.example is tracked.
+.env
+.env.*
+!.env.example
+*.env
+!*.env.example
+.envrc
+
+# Local overrides and data
+*.local
+.DS_Store
