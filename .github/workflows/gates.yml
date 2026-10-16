@@ -1,0 +1,20 @@
+name: Gates
+
+# Shared secret scan from House-Hold-Hub/Automation (Automation#2), pinned to the commit SHA
+# of Automation main that merged the shared workflows. Never reference a branch or a moving tag.
+# Published check name: "Secret scan / scan".
+# No path filters: this job is a required status check and must always report.
+# No dependency scan (no lockfile) and no OpenAPI validation (no specification) here.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Gitleaks over the commits the pull request adds; full history on push to main.
+  secret-scan:
+    name: Secret scan
+    uses: House-Hold-Hub/Automation/.github/workflows/secret-scan.yml@5eeae49dfbef5c30fadb4d2ab8a83db068c01488 # Automation main
