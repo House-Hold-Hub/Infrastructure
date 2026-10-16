@@ -141,8 +141,8 @@ contains no `localhost:8000`, a row written to PostgreSQL survived `down` + `up`
 
 Credential rotation (2026-10-16): with data in the volume, editing `.env` first made `migrate` fail with
 "password authentication failed"; restoring the old value, changing the role password in PostgreSQL
-(`ALTER ROLE`, the statement `\\password` issues) and then updating `.env` + `docker compose up -d` restored a healthy
-stack with the data intact. The interactive `\\password` prompt itself was not driven.
+(`ALTER ROLE`, the statement `\password` issues) and then updating `.env` + `docker compose up -d` restored a healthy
+stack with the data intact. The interactive `\password` prompt itself was not driven.
 
 Not verified: a browser login/registration flow end to end (no verified flow was exercised; only
 HTTP-level checks), TLS or non-localhost hosts, `DJANGO_DEBUG=true` runs, and Apple-silicon vs amd64 differences.
