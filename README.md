@@ -91,13 +91,41 @@ Startup order is enforced: `db` (healthcheck `pg_isready`) -> `migrate` (one-sho
 - **Migrations.** They run on every `up` through the `migrate` service and are idempotent
   ("No migrations to apply" on later runs). Re-run manually: `docker compose run --rm migrate`.
 - **Persistence.** Data lives in the named volume `householdhub_pgdata`; it survives `down` and restarts.
+- **`POSTGRES_*` initialise only an empty database.** `POSTGRES_DB`, `POSTGRES_USER` and
+  `POSTGRES_PASSWORD` are read by the PostgreSQL image only when `pgdata` is empty (first start). Afterwards
+  the role, database and password live inside the volume, while the Backend and `migrate` read `.env` on every
+  `up`. Editing these values in `.env` alone therefore makes the Backend fail to authenticate
+  (see "Rotate the PostgreSQL password" below).
 - **Changing `VITE_*`** needs `docker compose build frontend` (the value is baked into the bundle).
+
+### Rotate the PostgreSQL password (keeps data)
+
+Rotation changes the credential stored in the existing volume and then `.env`, in this order, so data is
+preserved. Do not edit `.env` first.
+
+```bash
+# 1. With the stack running and the OLD .env still in place, set the new password inside PostgreSQL.
+#    \password prompts twice and sends the hash, so the password stays out of shell history and logs.
+docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
+#    postgres=> \password householdhub      (use your POSTGRES_USER), then \q
+
+# 2. Put the same value in .env as POSTGRES_PASSWORD.
+# 3. Recreate the services so they pick it up (volume and data are untouched).
+docker compose up -d
+```
+
+If `.env` was already edited first, the Backend cannot connect: restore the old value in `.env`, run
+`docker compose up -d`, and follow the steps above. Rotation is not the same as
+`docker compose down -v`, which **deletes the volume and all data** and is only a reinitialisation:
+the next `up` creates a fresh empty database from whatever `.env` says. Use it only when losing the local
+data is acceptable. Renaming `POSTGRES_DB` or `POSTGRES_USER` on an existing volume is not covered by
+rotation; it needs SQL (`ALTER DATABASE/ROLE ... RENAME`) or a reinitialisation.
 
 Stop the stack:
 
 ```bash
 docker compose down        # keeps the database volume
-docker compose down -v     # also deletes the database volume (all local data)
+docker compose down -v     # DESTRUCTIVE: deletes the database volume (all local data); not a credential rotation
 ```
 
 Useful: `docker compose ps -a`, `docker compose logs -f backend`, `docker compose config -q` (validates
@@ -110,6 +138,11 @@ Run: `config -q`, full `up -d --build`, `migrate` exited 0 and applied all migra
 POST with the CSRF cookie/token passed CSRF (200) while one without token got 403, the built bundle
 contains no `localhost:8000`, a row written to PostgreSQL survived `down` + `up` and the second
 `migrate` applied nothing.
+
+Credential rotation (2026-10-16): with data in the volume, editing `.env` first made `migrate` fail with
+"password authentication failed"; restoring the old value, changing the role password in PostgreSQL
+(`ALTER ROLE`, the statement `\\password` issues) and then updating `.env` + `docker compose up -d` restored a healthy
+stack with the data intact. The interactive `\\password` prompt itself was not driven.
 
 Not verified: a browser login/registration flow end to end (no verified flow was exercised; only
 HTTP-level checks), TLS or non-localhost hosts, `DJANGO_DEBUG=true` runs, and Apple-silicon vs amd64 differences.
