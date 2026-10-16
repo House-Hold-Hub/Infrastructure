@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[rules]]
+id = "hhh-fixture-marker"
+description = "Synthetic marker for the throwaway negative test"
+regex = '''HHH-FIXTURE-MARKER-[A-Z0-9]{16}'''
