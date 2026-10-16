@@ -4,14 +4,16 @@ Local runtime configuration for House Hold Hub (ownership per ADR-009: Infrastru
 local full-stack orchestration, credentials and secret rotation, consuming the service-owned
 images of Backend and Frontend).
 
-This repository currently defines the **environment and secret contract** (Infrastructure#2).
-The Docker Compose definition belongs to Infrastructure#1 and is **not** included here.
+This repository defines the **environment and secret contract** (Infrastructure#2) and the **local
+Docker Compose stack** (Infrastructure#1): PostgreSQL, Backend and Frontend behind one origin.
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `.env.example` | Documented template: purpose, example and requiredness of every variable |
+| `compose.yaml` | Local stack: `db`, one-shot `migrate`, `backend`, `frontend` |
+| `nginx/default.conf` | Same-origin edge: SPA plus reverse proxy of `/api/` and `/admin/` to the Backend |
 | `.gitignore` | Blocks `.env` and `.env.*` (except `.env.example`) from being committed |
 
 ## Configure
@@ -30,10 +32,10 @@ Then edit `.env`:
 Variables are grouped in `.env.example` by consumer:
 
 - **PostgreSQL** (`POSTGRES_*`): read by the Backend and, by the same names, by the official
-  PostgreSQL image. PostgreSQL 14+ is the approved family; the exact version is set by Infrastructure#1.
+  PostgreSQL image. PostgreSQL 14+ is the approved family; the local stack pins `postgres:17-alpine` in `compose.yaml`.
 - **Backend runtime** (`DJANGO_*`, `WEB_CONCURRENCY`): read at process start from `config/settings.py`
   and the Backend `Dockerfile`. `DJANGO_SECRET_KEY` has no default and the Backend will not start without it.
-- **Frontend build-time** (`VITE_API_BASE_URL`): embedded in the JavaScript bundle by Vite at build
+- **Frontend build-time** (`VITE_API_BASE_URL`, empty for same-origin): embedded in the JavaScript bundle by Vite at build
   time. It is **public**; change it by rebuilding, never put secrets in any `VITE_*` variable.
 
 The variable list was checked against Backend `config/settings.py` + `Dockerfile` and Frontend
@@ -61,31 +63,67 @@ monitoring variables.
   selected before M9. Variables for them will be added only after those decisions.
 - **D03**: gates real personal data, including real-email staging.
 
-## Run locally
+## Run locally (Docker Compose)
 
-The full stack (PostgreSQL + Backend + Frontend) is orchestrated by Docker Compose, owned by
-Infrastructure#1, which is **not yet available**. Until then, the full-stack startup from
-`.env.example` has **not been tested**; do not treat this contract as startup-verified.
-
-What can be done today, with services run from their own repositories:
+Prerequisites: Docker Engine with Compose v2 (verified with Docker 29.8 / Compose 5.6), and the
+Backend, Frontend and Infrastructure repositories cloned as siblings (`../Backend`, `../Frontend`).
+Run from the main checkout of Infrastructure, not from a `.claude/worktrees/*` worktree. The service
+Dockerfiles are built from the sibling repositories and are not copied here.
 
 ```bash
-# PostgreSQL: any local PostgreSQL 14+ using the POSTGRES_* values from .env
-set -a; source .env; set +a
-
-# Backend (from the Backend repository)
-uv sync && uv run python manage.py migrate && uv run python manage.py runserver
-
-# Frontend (from the Frontend repository): VITE_API_BASE_URL is read at build/dev time
-npm ci && npm run dev
+cp .env.example .env     # then set POSTGRES_PASSWORD and DJANGO_SECRET_KEY (see Configure)
+docker compose up -d --build
 ```
 
-### Known points for Infrastructure#1 to settle
+Startup order is enforced: `db` (healthcheck `pg_isready`) -> `migrate` (one-shot
+`manage.py migrate --noinput`, must exit 0) -> `backend` (healthcheck) -> `frontend`. The app is at
+<http://localhost:8080> (published on 127.0.0.1 only; PostgreSQL publishes no port).
 
-- Backend documents a same-origin default topology without CORS, while the Frontend defaults
-  `VITE_API_BASE_URL` to `http://localhost:8000` (cross-origin from the dev server). The Compose
-  work must either serve both behind one origin or have the cross-origin case reviewed.
-- `POSTGRES_HOST` must be the Compose service name when the Backend runs in a container.
+- **Same origin, no CORS.** The Frontend container's nginx (`nginx/default.conf`, mounted over the
+  image's default site) serves the SPA and proxies `/api/` and `/admin/` to `backend:8000`, keeping the
+  `Host` header so sessions and CSRF work. `VITE_API_BASE_URL` must stay empty (relative URLs); the
+  client rejects any other cross-origin base. The Django admin is served without static assets
+  (the Backend image does not collect them), so it is unstyled.
+- **Database connectivity.** Compose sets `POSTGRES_HOST=db` and `POSTGRES_PORT=5432` for the Backend
+  and migration job whatever `.env` says (those values in `.env` are for services run on the host).
+- **Cookies.** `DJANGO_SECURE_COOKIES` defaults to `false` in Compose because the local stack is plain
+  HTTP. Use another host name only after adding it to `DJANGO_ALLOWED_HOSTS`.
+- **Migrations.** They run on every `up` through the `migrate` service and are idempotent
+  ("No migrations to apply" on later runs). Re-run manually: `docker compose run --rm migrate`.
+- **Persistence.** Data lives in the named volume `householdhub_pgdata`; it survives `down` and restarts.
+- **Changing `VITE_*`** needs `docker compose build frontend` (the value is baked into the bundle).
+
+Stop the stack:
+
+```bash
+docker compose down        # keeps the database volume
+docker compose down -v     # also deletes the database volume (all local data)
+```
+
+Useful: `docker compose ps -a`, `docker compose logs -f backend`, `docker compose config -q` (validates
+the file and the required `.env` values).
+
+### Verification (2026-10-16, Docker 29.8.2, Compose 5.6.0, Backend/Frontend `origin/main`)
+
+Run: `config -q`, full `up -d --build`, `migrate` exited 0 and applied all migrations, `GET /` -> 200
+(SPA), `GET /api/v1/` -> Backend JSON 404 through the proxy, `/admin/login/` -> 200, a same-origin
+POST with the CSRF cookie/token passed CSRF (200) while one without token got 403, the built bundle
+contains no `localhost:8000`, a row written to PostgreSQL survived `down` + `up` and the second
+`migrate` applied nothing.
+
+Not verified: a browser login/registration flow end to end (no verified flow was exercised; only
+HTTP-level checks), TLS or non-localhost hosts, `DJANGO_DEBUG=true` runs, and Apple-silicon vs amd64 differences.
+
+### Running services without Compose
+
+```bash
+set -a; source .env; set +a          # POSTGRES_HOST=localhost: needs your own PostgreSQL 14+
+uv sync && uv run python manage.py migrate && uv run python manage.py runserver   # in Backend
+npm ci && npm run dev                                                              # in Frontend
+```
+
+The Vite dev server is cross-origin to the Backend (`VITE_API_BASE_URL` empty would hit the Vite
+server itself); that case needs its own review and is not supported by the Compose stack.
 
 ## CI gate and branch protection
 

@@ -16,10 +16,10 @@ decisions D01–D06 in `product/roadmap.md`). Live GitHub issues, not Markdown, 
 execution state.
 
 Check the tree before describing what exists. The environment and secret contract (`.env.example`,
-`.gitignore`, README) is the core of the repository. Never describe full-stack startup from
-`.env.example` or any Compose definition as working unless it has been run. Without a verified Compose
-definition each service runs from its own repository with `.env` exported
-(`set -a; source .env; set +a`; README "Run locally").
+`.gitignore`, README) is the core of the repository. `compose.yaml` and `nginx/default.conf` define the local stack (README "Run locally", with the dated
+verification record); never describe startup as working beyond what that record says, and re-run
+`docker compose up -d --build` after changing either. Services can also run from their own repository
+with `.env` exported (`set -a; source .env; set +a`).
 
 ## Commands
 
@@ -89,6 +89,8 @@ against.
 
 ## Constraints for the Compose work
 
+- Same-origin is implemented by mounting `nginx/default.conf` over the Frontend image's site (no extra
+  service, no copied Dockerfile); Compose overrides `POSTGRES_HOST=db` and keeps `VITE_API_BASE_URL` empty.
 - The Backend assumes a same-origin topology and configures no CORS, and the Frontend client accepts only an
   empty `VITE_API_BASE_URL` or the page's own origin. Serve both behind one origin, and have any
   cross-origin case reviewed first; check the Frontend image's `VITE_API_BASE_URL` default against this.

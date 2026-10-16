@@ -1,0 +1,85 @@
+# Local full-stack orchestration (ADR-009; Infrastructure#1).
+# PostgreSQL + Backend + Frontend behind ONE origin (http://localhost:8080):
+# the Frontend image's nginx serves the SPA and proxies /api/ and /admin/ to the
+# Backend, so the browser never makes a cross-origin call and no CORS exists.
+# The service Dockerfiles are consumed from the sibling Backend/ and Frontend/
+# checkouts and are not copied here. Run from the main checkout of this repo.
+name: householdhub
+
+x-backend: &backend
+  build:
+    context: ../Backend
+  image: householdhub-backend:local
+  environment:
+    POSTGRES_DB: ${POSTGRES_DB:-householdhub}
+    POSTGRES_USER: ${POSTGRES_USER:-householdhub}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (cp .env.example .env)}
+    # Inside Compose the database is reached by service name and its fixed port.
+    POSTGRES_HOST: db
+    POSTGRES_PORT: "5432"
+    DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?set DJANGO_SECRET_KEY in .env (cp .env.example .env)}
+    DJANGO_DEBUG: ${DJANGO_DEBUG:-false}
+    DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:-localhost,127.0.0.1}
+    DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:-}
+    # The local stack is plain HTTP, where Secure cookies would never be sent back.
+    DJANGO_SECURE_COOKIES: ${DJANGO_SECURE_COOKIES:-false}
+    WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-householdhub}
+      POSTGRES_USER: ${POSTGRES_USER:-householdhub}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env (cp .env.example .env)}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+    restart: unless-stopped
+    # No published port: only the Compose network reaches PostgreSQL.
+
+  migrate:
+    <<: *backend
+    command: ["python", "manage.py", "migrate", "--noinput"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  backend:
+    <<: *backend
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # Any HTTP answer proves gunicorn is serving; /api/v1/ 404 or 401 still counts.
+      test: ["CMD", "python", "-c", "import urllib.request as u, urllib.error as e\ntry: u.urlopen('http://127.0.0.1:8000/api/v1/', timeout=3)\nexcept e.HTTPError: pass"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ../Frontend
+      args:
+        # Empty = same-origin relative URLs (the only value the client accepts besides its own origin).
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL-}
+    image: householdhub-frontend:local
+    depends_on:
+      backend:
+        condition: service_healthy
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    ports:
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
