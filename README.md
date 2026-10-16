@@ -103,9 +103,10 @@ npm ci && npm run dev
 
 The whole history was scanned with the same digest-pinned Gitleaks image before adoption: no findings.
 
-`main` protection: pull request required (0 approvals), required status check `Secret scan / scan`
-bound to GitHub Actions, enforced for administrators, no force-push, no deletion, "require
-branches to be up to date" off. Applied with Automation's `scripts/set-required-checks.sh` at the
+`main` protection (applied and verified on GitHub on 2026-10-16): pull request required
+(0 approvals), required status check `Secret scan / scan` bound to GitHub Actions (app 15368),
+enforced for administrators, no force-push, no deletion, "require branches to be up to date"
+off. Applied with Automation's `scripts/set-required-checks.sh` at the
 SHA above. No other check is required because no other workflow exists; dependency scanning and
 OpenAPI validation do not apply (no lockfile, no specification). Add checks only when a workflow
 that publishes them exists.
